@@ -1,2 +1,3 @@
 image_dup.py
 *.qcow2
+__pycache__/image_distribute.cpython-311.pyc

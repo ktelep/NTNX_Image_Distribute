@@ -205,7 +205,6 @@ class Prism_Central:
         vm_spec['spec']['resources']['nic_list'][0]['subnet_reference']['uuid'] = vm.subnet
 
         res = self._post_request("vms",vm_spec) 
-        pp.pprint(res)
         return res['status']['execution_context']['task_uuid']
 
     def vm_by_name(self, vm_name):
@@ -217,7 +216,7 @@ class Prism_Central:
         return vm
 
     def vm_by_uuid(self, vm_uuid):
-        name_filter = f"uuid=={vm_uuid}"
+        name_filter = f"vm_uuid=={vm_uuid}"
         payload = {"kind":"vm","filter":name_filter} 
         vm_resp = self._post_request("vms/list",payload)
         vm = VM()
@@ -334,8 +333,8 @@ def wait_for_task(pc, task_uuid, poll_time=10):
 def snapshot_vm(vm_uuid, pc):
     pass
     # Connect to PC and get VM's cluster UUID
-    new_vm = pc.vm_by_id(vm_uuid)
-    pe_ip = pc.clusters[new_vm['cluster_uuid']]['cvm_ips'][0] 
+    new_vm = pc.vm_by_uuid(vm_uuid)
+    pe_ip = pc['clusters'][new_vm['cluster_uuid']]['cvm_ips'][0] 
     # Connect to PE and take snapshot
     pe = Prism_Element(pe_ip,pe_user,pe_pass)
     res = pe.snap_vm(vm_uuid,f"{new_vm['name']}_SNAP")
@@ -418,8 +417,6 @@ if __name__ == "__main__":
        resp = wait_for_task(source_pc,task_uuid) 
        source_vms.append(resp['entity_reference_list'][0]['uuid'])
 
-    pp.pprint(source_vms)
-
     print(" - Creating Snapshots on VMs")
     for vm in source_vms:
         snapshot_vm(vm,source_pc)
@@ -445,8 +442,6 @@ if __name__ == "__main__":
        print(" - Waiting for VM creations to finish")
        resp = wait_for_task(target_pc,task_uuid) 
        target_vms.append(resp['entity_reference_list'][0]['uuid'])
-
-    pp.pprint(target_vms)
 
     print(" - Creating Snapshots on VMs")
     for vm in target_vms:

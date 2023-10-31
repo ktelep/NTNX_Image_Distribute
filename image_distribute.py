@@ -4,23 +4,23 @@ import pprint
 import json
 import time
 import os
+import configparser
+
 from base64 import b64encode
 from tqdm import tqdm
 from tqdm.utils import CallbackIOWrapper
 
-""" 
-Parameters
 """
-source_ip='192.168.2.50'
-source_user='admin'
-source_pass='W0nderFu!!'
+CLI Parameters?
+ -k (keep copy of downloaded image)
+ -v (Name of VM to be used as gold image)
+ -c (Configuration File)
+"""
 
-target_ip='192.168.2.40'
-target_user='admin'
-target_pass='W0nderFu!!'
-
-pe_user='admin'
-pe_pass='W0nderFu!!'
+""" 
+Parse our Configuration
+"""
+config_file_name = 'config.ini'
 
 """
 suppress insecure connection warnings with urllib3
@@ -180,6 +180,14 @@ class Prism_Central:
         res = response.json()
         return res
 
+    def _delete_request(self, url_target):
+        url = self.url + url_target
+        try:
+            response = requests.request('delete', url, headers=self.headers, verify=False)
+        except requests.exceptions.RequestException as e:  
+            raise SystemExit(e)
+        res = response.json()
+
     def create_vm(self, vm, cluster_uuid):
         vm_spec_template = '''
          { "metadata": { "kind": "vm" },
@@ -262,6 +270,10 @@ class Prism_Central:
                     f.write(chunk)
                     pbar.update(len(chunk))
         return local_filename
+
+    def remove_image(self, image_uuid):
+        res = self._delete_request(f"images/{image_uuid}")
+        return res 
 
     def upload_image(self, image_uuid, local_filename):
         # Upload the file, using tqdm for progress bar 
@@ -354,6 +366,26 @@ def snapshot_vm(vm_uuid, pc):
 
 
 if __name__ == "__main__":
+    
+   # Pull in our configuration info
+    config = configparser.ConfigParser()
+    config.read(config_file_name)
+
+    source_ip = config['source_pc']['ip']
+    source_user = config['source_pc']['username']
+    source_pass = config['source_pc']['password']
+
+    target_ip = config['target_pc']['ip']
+    target_user = config['target_pc']['username']
+    target_pass = config['target_pc']['password']
+
+    pe_user = config['prism_element']['username']
+    pe_pass = config['prism_element']['password']
+
+    target_subnet_name = config['global']['network_name']
+
+
+   # Create our PC objects
     source_pc = Prism_Central(source_ip,source_user,source_pass)
     target_pc = Prism_Central(target_ip,target_user,target_pass)
 
@@ -365,15 +397,14 @@ if __name__ == "__main__":
     source_vm_name = "GoldTest1"
     source_image_name = f"{source_vm_name}_image"
     local_image_filename = f"{source_vm_name}_image.qcow2"
-    target_subnet_name = "Prod"
 
    # Gather info on the source VM
     print()
     print(f"Gathering Information on source VM: {source_vm_name}")
     svm = source_pc.vm_by_name(source_vm_name)
 
-    print(f"- VM uuid: {svm.uuid}")
-    print(f"- Disk uuid: {svm.disk_uuid}")
+    print(f" - VM uuid: {svm.uuid}")
+    print(f" - Disk uuid: {svm.disk_uuid}")
 
     print() 
     print(f"Generating image from source VM")
@@ -383,20 +414,26 @@ if __name__ == "__main__":
    # Extract the source_image_uuid out of the completed task
    # Probably a better way to do this....
     source_image_uuid = completed_task['entity_reference_list'][0]['uuid']
-    print(f"- Source Image uuid: {source_image_uuid}")
+    print(f" - Source Image uuid: {source_image_uuid}")
 
    # Download the image locally
     print()
     print(f"Downloading Image to Local System - Filename: {local_image_filename}") 
-    source_pc.download_image(source_image_uuid,local_image_filename)
-
+    try:
+        source_pc.download_image(source_image_uuid,local_image_filename)
+    except Exception as e:
+        print("An error occurred during download, cleaning up")
+        source_pc.remove_image(source_image_uuid)
+        os.unlink(local_image_filename)
+        raise SystemExit(e)
+         
    # Create our image at the target pc
     print()
     print("Creating Image object in Target Prism Central")
     task_id = target_pc.create_image(source_image_name)
     completed_task = wait_for_task(target_pc, task_id)
     target_image_uuid = completed_task['entity_reference_list'][0]['uuid']
-    print(f"- Target Image uuid: {target_image_uuid}")
+    print(f" - Target Image uuid: {target_image_uuid}")
 
    # Upload our image to the target pc
     print()
@@ -429,6 +466,7 @@ if __name__ == "__main__":
        source_tasks.append(task_id)
 
     source_vms = list()
+    print()
     print("Waiting for VM creations to finish")
     for task_uuid in source_tasks:
        resp = wait_for_task(source_pc,task_uuid) 
@@ -461,6 +499,7 @@ if __name__ == "__main__":
        target_tasks.append(task_id)
 
     target_vms = list()
+    print()
     print("Waiting for VM creations to finish")
     for task_uuid in target_tasks:
        resp = wait_for_task(target_pc,task_uuid) 
@@ -479,8 +518,9 @@ if __name__ == "__main__":
 
     print()
     print("Process Complete")
-    print(f"Souce VM: {source_vm_name}")
+    print(f"Source VM: {source_vm_name}")
     print(f"Image Name: {source_image_name}")
+    print()
     print(" Cluster Report ")
     print(" -------------------------------")
     for i in output_info:

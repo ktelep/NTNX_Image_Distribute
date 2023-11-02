@@ -4,26 +4,16 @@ import pprint
 import json
 import time
 import os
+import argparse
 import configparser
 
 from base64 import b64encode
 from tqdm import tqdm
 from tqdm.utils import CallbackIOWrapper
+from datetime import datetime
 
 """
-CLI Parameters?
- -k (keep copy of downloaded image)
- -v (Name of VM to be used as gold image)
- -c (Configuration File)
-"""
-
-""" 
-Parse our Configuration
-"""
-config_file_name = 'config.ini'
-
-"""
-suppress insecure connection warnings with urllib3
+Suppress insecure connection warnings with urllib3
 """
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -141,6 +131,8 @@ class Prism_Central:
         cl_resp = self._post_request("clusters/list",payload)
         payload = {"kind":"host"}
         host_resp = self._post_request("hosts/list",payload)
+        payload = {"kind":"subnet"}
+        subnet_resp = self._post_request("subnets/list",payload)
 
         for cluster in cl_resp['entities']:
             cluster_uuid = cluster['metadata']['uuid']
@@ -148,7 +140,8 @@ class Prism_Central:
             if 'pc' not in cluster['status']['resources']['config']['build']['version']:
                 self.clusters[cluster_uuid] = { "name":cluster_name,
                                                 "spec":cluster['spec'],
-                                                "cvm_ips":list()
+                                                "cvm_ips":list(),
+                                                "subnets":{}
                 }
             
                 for host in host_resp['entities']:
@@ -156,6 +149,12 @@ class Prism_Central:
                     cvm_ip = host['status']['resources']['controller_vm']['ip']
                     if cluster_ref_uuid == cluster_uuid:
                         self.clusters[cluster_uuid]['cvm_ips'].append(cvm_ip)
+
+                for subnet in subnet_resp['entities']:
+                    cluster_ref_uuid = subnet['spec']['cluster_reference']['uuid']
+                    if cluster_ref_uuid == cluster_uuid:
+                        self.clusters[cluster_uuid]['subnets'][subnet['status']['name']] = dict()
+                        self.clusters[cluster_uuid]['subnets'][subnet['status']['name']]['uuid'] = subnet['metadata']['uuid']
 
             else:
                 self.uuid = cluster_uuid
@@ -232,8 +231,11 @@ class Prism_Central:
         payload = {"kind":"vm","filter":name_filter} 
         vm_resp = self._post_request("vms/list",payload)
         vm = VM()
-        vm.load_entity(vm_resp['entities'][0])
-        return vm
+        if 'entities' in vm_resp:
+            vm.load_entity(vm_resp['entities'][0])
+            return vm
+        else:
+            return None
 
     def vm_by_uuid(self, vm_uuid):
         vm_resp = self._get_request(f"vms/{vm_uuid}")
@@ -360,43 +362,87 @@ def snapshot_vm(vm_uuid, pc):
 
     # Connect to PE and take snapshot
     pe = Prism_Element(pe_ip,pe_user,pe_pass)
-    snapshot_name = f"{new_vm.name}_SNAP_{pe_name}"
+    snapshot_name = f"{new_vm.name}_SNAP"
     res = pe.snap_vm(vm_uuid,snapshot_name)
     return (new_vm.name, snapshot_name, pe_name, res)
 
+def pre_checks(source_pc, target_pc, vm_name, subnet_name):
+    print()
+    print("Running Pre-Checks")
+    # Run some prechecks to make sure we're successful
+    if source_pc.name == None or target_pc.name == None:
+        print("Connection to one or both PC Instances is invalid")
+        raise SystemExit()    
+    print(" - Source and Target PC Connections look good")
 
-if __name__ == "__main__":
+    if source_pc.uuid == target_pc.uuid:
+        print("Source and Target Prism Centrals appear to be the same, check config file")
+    print(" - Source and Target PCs are not the same")
+
+    if not source_pc.vm_by_name(vm_name):
+        print("Unable to collect information about Source VM from Prism Central")
+        raise SystemExit() 
+    print(" - Source VM exists on the Source PC")
+
+    for cluster_uuid in source_pc.clusters.keys():
+       if subnet_name not in source_pc.clusters[cluster_uuid]['subnets']:
+           print(f"Unable to locate subnet with name {subnet_name} on cluster {source_pc.clusters[cluster_uuid]['name']}")
+           raise SystemExit() 
+    print(" - Source PC Clusters all contain the appropriate network name")
     
-   # Pull in our configuration info
+    for cluster_uuid in target_pc.clusters.keys():
+       if subnet_name not in target_pc.clusters[cluster_uuid]['subnets']:
+           print(f"Unable to locate subnet with name {subnet_name} on cluster {target_pc.clusters[cluster_uuid]['name']}")
+           raise SystemExit() 
+    print(" - Target PC Clusters all contain the appropriate network name")
+
+    print(" - Everything Checks out, go for launch")
+if __name__ == "__main__":
+
+   # Parse arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("vm_name", help="Name of Virtual Machine on Source PC to distribute")
+    parser.add_argument("-c","--config", help="Name of Configuration File (default: config.ini)",
+                        default="config.ini") 
+    parser.add_argument("-k","--keep", help="Keep downloaded copy of disk image",
+                        action="store_true")
+    args = parser.parse_args()
+
+   # Identify our source VM
+    source_vm_name = args.vm_name
+   
+   # Build our VM labels
+    now = datetime.now()
+    datecode = now.strftime("%Y%m%d%H%M")
+    source_image_name = f"{source_vm_name}_image_{datecode}"
+    local_image_filename = f"{source_vm_name}_image_{datecode}.qcow2"
+
+   # Read and parse config file 
     config = configparser.ConfigParser()
-    config.read(config_file_name)
+    print(f"Parsing Config File: {args.config}")
+    parsed = config.read(args.config)
+    if not parsed:
+        print("Unable to parse config file, please verify path and file contents")
+        raise SystemExit()
 
-    source_ip = config['source_pc']['ip']
-    source_user = config['source_pc']['username']
-    source_pass = config['source_pc']['password']
-
-    target_ip = config['target_pc']['ip']
-    target_user = config['target_pc']['username']
-    target_pass = config['target_pc']['password']
+    spc = config['source_pc']
+    tpc = config['target_pc']
 
     pe_user = config['prism_element']['username']
     pe_pass = config['prism_element']['password']
 
     target_subnet_name = config['global']['network_name']
 
-
    # Create our PC objects
-    source_pc = Prism_Central(source_ip,source_user,source_pass)
-    target_pc = Prism_Central(target_ip,target_user,target_pass)
+    source_pc = Prism_Central(spc['ip'],spc['username'],spc['password'])
+    target_pc = Prism_Central(tpc['ip'],tpc['username'],tpc['password'])
 
    # Connect to Source and Target Prism Centrals
     source_pc.connect()
     target_pc.connect()
 
-   # Identify our source VM
-    source_vm_name = "GoldTest1"
-    source_image_name = f"{source_vm_name}_image"
-    local_image_filename = f"{source_vm_name}_image.qcow2"
+   # Run a few pre-checks
+    pre_checks(source_pc, target_pc, source_vm_name, target_subnet_name)
 
    # Gather info on the source VM
     print()
@@ -414,7 +460,7 @@ if __name__ == "__main__":
    # Extract the source_image_uuid out of the completed task
    # Probably a better way to do this....
     source_image_uuid = completed_task['entity_reference_list'][0]['uuid']
-    print(f" - Source Image uuid: {source_image_uuid}")
+    print(f" - Source Image name: {source_image_name} uuid: {source_image_uuid}")
 
    # Download the image locally
     print()
@@ -433,7 +479,7 @@ if __name__ == "__main__":
     task_id = target_pc.create_image(source_image_name)
     completed_task = wait_for_task(target_pc, task_id)
     target_image_uuid = completed_task['entity_reference_list'][0]['uuid']
-    print(f" - Target Image uuid: {target_image_uuid}")
+    print(f" - Target Image name: {source_image_name} uuid: {target_image_uuid}")
 
    # Upload our image to the target pc
     print()
@@ -454,12 +500,10 @@ if __name__ == "__main__":
     source_tasks = list()
     for cluster_uuid in source_pc.clusters.keys():
        # We need to determine the subnets attached and connect to that subnet                 
-       print(f" - Determining network info for cluster {source_pc.clusters[cluster_uuid]['name']}")
-       subnet_uuid = source_pc.subnet_by_name(target_subnet_name,cluster_uuid)
-       new_vm.subnet = subnet_uuid
+       new_vm.subnet = source_pc.clusters[cluster_uuid]['subnets'][target_subnet_name]['uuid']
        new_vm.cluster_uuid = cluster_uuid
        new_vm.disk_uuid = source_image_uuid
-       new_vm.name = f"{source_vm_name}_VM_{source_pc.clusters[cluster_uuid]['name']}"
+       new_vm.name = f"{source_vm_name}_VM_{source_pc.clusters[cluster_uuid]['name']}_{datecode}"
 
        print(f" - Creating VM {new_vm.name}")
        task_id = source_pc.create_vm(new_vm,cluster_uuid)
@@ -487,12 +531,10 @@ if __name__ == "__main__":
     target_tasks = list()
     for cluster_uuid in target_pc.clusters.keys():
        # We need to determine the subnets attached and connect to that subnet                 
-       print(f" - Determining network info for cluster {target_pc.clusters[cluster_uuid]['name']}")
-       subnet_uuid = target_pc.subnet_by_name(target_subnet_name,cluster_uuid)
-       new_vm.subnet = subnet_uuid
+       new_vm.subnet = target_pc.clusters[cluster_uuid]['subnets'][target_subnet_name]['uuid']
        new_vm.cluster_uuid = cluster_uuid
        new_vm.disk_uuid = target_image_uuid
-       new_vm.name = f"{source_vm_name}_VM_{target_pc.clusters[cluster_uuid]['name']}"
+       new_vm.name = f"{source_vm_name}_VM_{target_pc.clusters[cluster_uuid]['name']}_{datecode}"
 
        print(f" - Creating VM {new_vm.name}")
        task_id = target_pc.create_vm(new_vm,cluster_uuid)
@@ -512,9 +554,11 @@ if __name__ == "__main__":
         output_info.append(f"Cluster: {res[2]} VM: {res[0]} Snap: {res[1]}")
     
     print(" - Completed Snapshots")
-    print()
-    print("Cleaning up local image")
-    os.unlink(local_image_filename)
+
+    if not args.keep:
+        print()
+        print("Cleaning up local image")
+        os.unlink(local_image_filename)
 
     print()
     print("Process Complete")

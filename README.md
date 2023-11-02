@@ -10,6 +10,8 @@ Modify the config.ini file appropriately
 
 Run the Script
 
+    python3 image_distribute.py GoldImageVM
+
 What does it do?
 
 1. Creates an image from the idenfied "Gold" VM

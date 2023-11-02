@@ -268,7 +268,7 @@ class Prism_Central:
             r.raise_for_status()
             with open(local_filename, 'wb') as f:
                 pbar = tqdm(total=image_size, unit="B", unit_scale=True, unit_divisor=1024)
-                for chunk in r.iter_content(chunk_size=1024*1024*1024):   # 1GB chunks
+                for chunk in r.iter_content(chunk_size=8192):   # 8KB Chunks?
                     f.write(chunk)
                     pbar.update(len(chunk))
         return local_filename
@@ -379,9 +379,14 @@ def pre_checks(source_pc, target_pc, vm_name, subnet_name):
         print("Source and Target Prism Centrals appear to be the same, check config file")
     print(" - Source and Target PCs are not the same")
 
-    if not source_pc.vm_by_name(vm_name):
+    try:
+        if not source_pc.vm_by_name(vm_name):
+            print("Unable to collect information about Source VM from Prism Central")
+            raise SystemExit() 
+    except Exception as e:
         print("Unable to collect information about Source VM from Prism Central")
-        raise SystemExit() 
+        raise SystemExit(e) 
+    
     print(" - Source VM exists on the Source PC")
 
     for cluster_uuid in source_pc.clusters.keys():
@@ -487,73 +492,45 @@ if __name__ == "__main__":
     target_pc.upload_image(target_image_uuid,local_image_filename)
 
   # Create our new VMs
-    print()
-    print("Creating VMs on all clusters attached to Source Prism Central")
-    new_vm = VM()
-    new_vm.description = "Generated VM from Distribution Script"
-    new_vm.num_sockets = svm.num_sockets
-    new_vm.num_vcpus_per_socket = svm.num_vcpus_per_socket
-    new_vm.memory_size_mib = svm.memory_size_mib
-
-   # Create VMs on clusters attached to the source
-   # We kick them off in parallel, then check them all at once for success
-    source_tasks = list()
-    for cluster_uuid in source_pc.clusters.keys():
-       # We need to determine the subnets attached and connect to that subnet                 
-       new_vm.subnet = source_pc.clusters[cluster_uuid]['subnets'][target_subnet_name]['uuid']
-       new_vm.cluster_uuid = cluster_uuid
-       new_vm.disk_uuid = source_image_uuid
-       new_vm.name = f"{source_vm_name}_VM_{source_pc.clusters[cluster_uuid]['name']}_{datecode}"
-
-       print(f" - Creating VM {new_vm.name}")
-       task_id = source_pc.create_vm(new_vm,cluster_uuid)
-       source_tasks.append(task_id)
-
-    source_vms = list()
-    print()
-    print("Waiting for VM creations to finish")
-    for task_uuid in source_tasks:
-       resp = wait_for_task(source_pc,task_uuid) 
-       source_vms.append(resp['entity_reference_list'][0]['uuid'])
-
     output_info = list()
     print()
-    print("Creating Snapshots on VMs")
-    for vm in source_vms:
-        res = snapshot_vm(vm,source_pc)
-        output_info.append(f"Cluster: {res[2]} VM: {res[0]} Snap: {res[1]}")
-    print(" - Completed Snapshots")
+    for pc in [source_pc,target_pc]:
+        print(f"Creating VMs on all clusters attached to {pc.name}")
+        new_vm = VM()
+        new_vm.description = "Generated VM from Distribution Script"
+        new_vm.num_sockets = svm.num_sockets
+        new_vm.num_vcpus_per_socket = svm.num_vcpus_per_socket
+        new_vm.memory_size_mib = svm.memory_size_mib
 
-   # Create VMs on clusters attached to the target
-   # We kick them off in parallel, then check them all at once for success
-    print()
-    print("Creating VMs on all clusters attached to Target Prism Central")
-    target_tasks = list()
-    for cluster_uuid in target_pc.clusters.keys():
-       # We need to determine the subnets attached and connect to that subnet                 
-       new_vm.subnet = target_pc.clusters[cluster_uuid]['subnets'][target_subnet_name]['uuid']
-       new_vm.cluster_uuid = cluster_uuid
-       new_vm.disk_uuid = target_image_uuid
-       new_vm.name = f"{source_vm_name}_VM_{target_pc.clusters[cluster_uuid]['name']}_{datecode}"
+       # We kick them off in parallel, then check them all at once for success
+        source_tasks = list()
+        for cluster_uuid in pc.clusters.keys():
+            new_vm.subnet = pc.clusters[cluster_uuid]['subnets'][target_subnet_name]['uuid']
+            new_vm.cluster_uuid = cluster_uuid
+            new_vm.name = f"{source_vm_name}_VM_{pc.clusters[cluster_uuid]['name']}_{datecode}"
 
-       print(f" - Creating VM {new_vm.name}")
-       task_id = target_pc.create_vm(new_vm,cluster_uuid)
-       target_tasks.append(task_id)
+            if pc.uuid == source_pc.uuid:
+                new_vm.disk_uuid = source_image_uuid
+            else:
+                new_vm.disk_uuid = target_image_uuid
 
-    target_vms = list()
-    print()
-    print("Waiting for VM creations to finish")
-    for task_uuid in target_tasks:
-       resp = wait_for_task(target_pc,task_uuid) 
-       target_vms.append(resp['entity_reference_list'][0]['uuid'])
- 
-    print()
-    print("Creating Snapshots on VMs")
-    for vm in target_vms:
-        res = snapshot_vm(vm,target_pc)
-        output_info.append(f"Cluster: {res[2]} VM: {res[0]} Snap: {res[1]}")
-    
-    print(" - Completed Snapshots")
+            print(f" - Creating VM {new_vm.name}")
+            task_id = pc.create_vm(new_vm,cluster_uuid)
+            source_tasks.append(task_id)
+
+        source_vms = list()
+        print()
+        print("Waiting for VM creations to finish")
+        for task_uuid in source_tasks:
+            resp = wait_for_task(pc,task_uuid) 
+            source_vms.append(resp['entity_reference_list'][0]['uuid'])
+
+        print()
+        print("Creating Snapshots on VMs")
+        for vm in source_vms:
+            res = snapshot_vm(vm,pc)
+            output_info.append(f"Cluster: {res[2]} VM: {res[0]} Snap: {res[1]}")
+        print(" - Completed Snapshots")
 
     if not args.keep:
         print()

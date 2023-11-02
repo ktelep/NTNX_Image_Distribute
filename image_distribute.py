@@ -90,7 +90,7 @@ class VM:
 
     def load_entity(self, entity):
         self.name = entity['status']['name']
-        self.description = None
+        self.description = None #TODO: Load description
         self.uuid = entity['metadata']['uuid']
         self.num_sockets = entity['status']['resources']['num_sockets']
         self.num_vcpus_per_socket = entity['status']['resources']['num_vcpus_per_socket']

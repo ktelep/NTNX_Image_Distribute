@@ -362,7 +362,7 @@ def snapshot_vm(vm_uuid, pc):
 
     # Connect to PE and take snapshot
     pe = Prism_Element(pe_ip,pe_user,pe_pass)
-    snapshot_name = f"{new_vm.name}_SNAP"
+    snapshot_name = f"{new_vm.name} - Snapshot"
     res = pe.snap_vm(vm_uuid,snapshot_name)
     return (new_vm.name, snapshot_name, pe_name, res)
 
@@ -407,10 +407,12 @@ if __name__ == "__main__":
    # Parse arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("vm_name", help="Name of Virtual Machine on Source PC to distribute")
+    parser.add_argument("-n", "--snapshot_name", help="Name for image and associated snapshots and VMs",
+                        required=False)
     parser.add_argument("-c","--config", help="Name of Configuration File (default: config.ini)",
-                        default="config.ini") 
+                        default="config.ini", required=False) 
     parser.add_argument("-k","--keep", help="Keep downloaded copy of disk image",
-                        action="store_true")
+                        action="store_true", required=False)
     args = parser.parse_args()
 
    # Identify our source VM
@@ -419,7 +421,13 @@ if __name__ == "__main__":
    # Build our VM labels
     now = datetime.now()
     datecode = now.strftime("%Y%m%d%H%M")
-    source_image_name = f"{source_vm_name}_image_{datecode}"
+
+    source_image_name = ""
+    if not args.snapshot_name:
+        source_image_name = f"{source_vm_name}_image_{datecode}"
+    else:
+        source_image_name = args.snapshot_name
+    
     local_image_filename = f"{source_vm_name}_image_{datecode}.qcow2"
 
    # Read and parse config file 
@@ -495,6 +503,7 @@ if __name__ == "__main__":
     output_info = list()
     print()
     for pc in [source_pc,target_pc]:
+        output_info.append(f"Prism Central: {pc.name}")
         print(f"Creating VMs on all clusters attached to {pc.name}")
         new_vm = VM()
         new_vm.description = "Generated VM from Distribution Script"
@@ -507,14 +516,17 @@ if __name__ == "__main__":
         for cluster_uuid in pc.clusters.keys():
             new_vm.subnet = pc.clusters[cluster_uuid]['subnets'][target_subnet_name]['uuid']
             new_vm.cluster_uuid = cluster_uuid
-            new_vm.name = f"{source_vm_name}_VM_{pc.clusters[cluster_uuid]['name']}_{datecode}"
+            if not args.snapshot_name:
+                new_vm.name = f"{source_vm_name}_VM_{pc.clusters[cluster_uuid]['name']}_{datecode}"
+            else:
+                new_vm.name = f"{args.snapshot_name} VM"
 
             if pc.uuid == source_pc.uuid:
                 new_vm.disk_uuid = source_image_uuid
             else:
                 new_vm.disk_uuid = target_image_uuid
 
-            print(f" - Creating VM {new_vm.name}")
+            print(f" - Creating VM {new_vm.name} on cluster {pc.clusters[cluster_uuid]['name']}")
             task_id = pc.create_vm(new_vm,cluster_uuid)
             source_tasks.append(task_id)
 
@@ -529,7 +541,10 @@ if __name__ == "__main__":
         print("Creating Snapshots on VMs")
         for vm in source_vms:
             res = snapshot_vm(vm,pc)
-            output_info.append(f"Cluster: {res[2]} VM: {res[0]} Snap: {res[1]}")
+            output_info.append(f"  Cluster: {res[2]}")
+            output_info.append(f"       VM: {res[0]}")
+            output_info.append(f"       Snap: {res[1]}")
+
         print(" - Completed Snapshots")
 
     if not args.keep:
@@ -539,6 +554,7 @@ if __name__ == "__main__":
 
     print()
     print("Process Complete")
+    print("--------------------------")
     print(f"Source VM: {source_vm_name}")
     print(f"Image Name: {source_image_name}")
     print()

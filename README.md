@@ -8,11 +8,11 @@ Python script for distribution of VM images for Citrix across multiple PCs and C
 
 ## Modify the config.ini file appropriately
 
-[global] section provides the Name for the subnet as defined in PC that the Citrix VMs will be attached to
+**[global]** section provides the Name for the subnet as defined in PC that the Citrix VMs will be attached to
 
-[source_pc] and [target_pc] sections provide the IP and credentials for your source and target prism central instances
+**[source_pc]** and **[target_pc]** sections provide the IP and credentials for your source and target prism central instances
 
-[prism_element] provides the credentials for the PRism Element clusters.  You do not need to provide an IP address here, as they are discovered from the Prism Central Instances
+**[prism_element]** provides the credentials for the PRism Element clusters.  You do not need to provide an IP address here, as they are discovered from the Prism Central Instances
 
 ## Run the Script
 
@@ -30,7 +30,7 @@ As an example, naming the image 'Citrix Desktop - MyUpdated - Patched 10-14-2023
 
     python3 image_distribute.py -n "Citrix Desktop - MyUpdated - Patched 10-14-2023" VQ2UA202
 
-What does it do?
+## What does it do?
 
 1. Confirms all PCs are accessible, Networks all exist on all clusters, and source VM exists
 2. Creates an image from the idenfied "Gold" VM
@@ -39,7 +39,7 @@ What does it do?
 5. Creates VMs on every cluster attached to both source and target PCs based off of the image
 6. Creates a snapshot of each VM at the PE level in preparation for Citrix use
 
-Assumptions:
+## Assumptions
 
 1. Network name is the same across all PE clusters
 2. All PE clusters use the same user/pass

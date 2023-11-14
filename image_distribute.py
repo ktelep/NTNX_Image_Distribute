@@ -4,6 +4,7 @@ import pprint
 import json
 import time
 import os
+import re
 import argparse
 import configparser
 
@@ -366,7 +367,7 @@ def snapshot_vm(vm_uuid, pc):
     res = pe.snap_vm(vm_uuid,snapshot_name)
     return (new_vm.name, snapshot_name, pe_name, res)
 
-def pre_checks(source_pc, target_pc, vm_name, subnet_name):
+def pre_checks(source_pc, target_pc, vm_name, subnet_name, source_image_name):
     print()
     print("Running Pre-Checks")
     # Run some prechecks to make sure we're successful
@@ -400,6 +401,12 @@ def pre_checks(source_pc, target_pc, vm_name, subnet_name):
            print(f"Unable to locate subnet with name {subnet_name} on cluster {target_pc.clusters[cluster_uuid]['name']}")
            raise SystemExit() 
     print(" - Target PC Clusters all contain the appropriate network name")
+
+    if (re.search(r'[\[\]$,]', source_image_name)):
+        print(f"Specified name for image includes invalid characters ( []?, )")
+        raise SystemExit()
+
+    print(" - Image Name contains only valid characters")
 
     print(" - Everything Checks out, go for launch")
 if __name__ == "__main__":
@@ -451,11 +458,14 @@ if __name__ == "__main__":
     target_pc = Prism_Central(tpc['ip'],tpc['username'],tpc['password'])
 
    # Connect to Source and Target Prism Centrals
+    print("Creating connections to Prism Central Instances")
+    print(" - Connecting to Source PC")
     source_pc.connect()
+    print(" - Connecting to Target PC")
     target_pc.connect()
 
-   # Run a few pre-checks
-    pre_checks(source_pc, target_pc, source_vm_name, target_subnet_name)
+   # Run a few pre-checks to make sure our environment is sane
+    pre_checks(source_pc, target_pc, source_vm_name, target_subnet_name, source_image_name)
 
    # Gather info on the source VM
     print()

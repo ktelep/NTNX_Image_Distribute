@@ -47,7 +47,3 @@ As an example, naming the image 'Citrix Desktop - MyUpdated - Patched 10-14-2023
 5. Creates VMs on every cluster attached to both source and target PCs based off of the image
 6. Creates a snapshot of each VM at the PE level in preparation for Citrix use
 
-## Assumptions
-
-1. Network name is the same across all PE clusters
-2. All PE clusters use the same user/pass

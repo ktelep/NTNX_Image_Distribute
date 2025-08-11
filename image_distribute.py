@@ -138,7 +138,7 @@ class Prism_Central:
         for cluster in cl_resp['entities']:
             cluster_uuid = cluster['metadata']['uuid']
             cluster_name = cluster['spec']['name']
-            if 'pc' not in cluster['status']['resources']['config']['build']['version']:
+            if 'pc' not in cluster['status']['resources']['config']['build']['full_version']:
                 self.clusters[cluster_uuid] = { "name":cluster_name,
                                                 "spec":cluster['spec'],
                                                 "cvm_ips":list(),
@@ -152,6 +152,10 @@ class Prism_Central:
                         self.clusters[cluster_uuid]['cvm_ips'].append(cvm_ip)
 
                 for subnet in subnet_resp['entities']:
+                    # Ignore overlays and non-VLAN networks
+                    if subnet['spec']['resources']['subnet_type'] != 'VLAN':
+                        continue
+
                     cluster_ref_uuid = subnet['spec']['cluster_reference']['uuid']
                     if cluster_ref_uuid == cluster_uuid:
                         self.clusters[cluster_uuid]['subnets'][subnet['status']['name']] = dict()
@@ -354,7 +358,7 @@ def wait_for_task(pc, task_uuid, poll_time=10):
             print(f"   {perc}% Complete")
             time.sleep(poll_time)
 
-def snapshot_vm(vm_uuid, pc):
+def snapshot_vm(vm_uuid, pc, pe_config):
     pass
     # Connect to PC and get VM's cluster UUID
     new_vm = pc.vm_by_uuid(vm_uuid)
@@ -362,23 +366,23 @@ def snapshot_vm(vm_uuid, pc):
     pe_name = pc.clusters[new_vm.cluster_uuid]['name']
 
     # Connect to PE and take snapshot
-    pe = Prism_Element(pe_ip,pe_user,pe_pass)
+    pe = Prism_Element(pe_ip,pe_config[pe_name]['username'],pe_config[pe_name]['password'])
     snapshot_name = f"{new_vm.name} - Snapshot"
     res = pe.snap_vm(vm_uuid,snapshot_name)
     return (new_vm.name, snapshot_name, pe_name, res)
 
-def pre_checks(source_pc, target_pc, vm_name, subnet_name, source_image_name):
+def pre_checks(source_pc, target_pc, vm_name, source_image_name, pe_config, all_targets):
     print()
     print("Running Pre-Checks")
     # Run some prechecks to make sure we're successful
     if source_pc.name == None or target_pc.name == None:
         print("Connection to one or both PC Instances is invalid")
         raise SystemExit()    
-    print(" - Source and Target PC Connections look good")
+    print(" - Source and Target PC connections look good")
 
     if source_pc.uuid == target_pc.uuid:
         print("Source and Target Prism Centrals appear to be the same, check config file")
-    print(" - Source and Target PCs are not the same")
+    print(" - Source and Target are different PCs")
 
     try:
         if not source_pc.vm_by_name(vm_name):
@@ -387,28 +391,58 @@ def pre_checks(source_pc, target_pc, vm_name, subnet_name, source_image_name):
     except Exception as e:
         print("Unable to collect information about Source VM from Prism Central")
         raise SystemExit(e) 
-    
-    print(" - Source VM exists on the Source PC")
 
-    for cluster_uuid in source_pc.clusters.keys():
-       if subnet_name not in source_pc.clusters[cluster_uuid]['subnets']:
-           print(f"Unable to locate subnet with name {subnet_name} on cluster {source_pc.clusters[cluster_uuid]['name']}")
-           raise SystemExit() 
-    print(" - Source PC Clusters all contain the appropriate network name")
-    
-    for cluster_uuid in target_pc.clusters.keys():
-       if subnet_name not in target_pc.clusters[cluster_uuid]['subnets']:
-           print(f"Unable to locate subnet with name {subnet_name} on cluster {target_pc.clusters[cluster_uuid]['name']}")
-           raise SystemExit() 
-    print(" - Target PC Clusters all contain the appropriate network name")
+    print()
+    print(" - Source VM exists on the Source PC")
 
     if (re.search(r'[\[\]$,]', source_image_name)):
         print(f"Specified name for image includes invalid characters ( []?, )")
         raise SystemExit()
 
-    print(" - Image Name contains only valid characters")
+    print(" - Requested image name contains only valid characters")
+    print()
+
+    # Check that our target clusters exist on their respective PCs
+    print(" - Checking target clusters exist and have valid networks")
+    print()
+
+    for cluster in all_targets:
+        found = False
+        for pc in [source_pc,target_pc]:
+            for cl_uuid in pc.clusters.keys():
+                if pc.clusters[cl_uuid]['name'] == cluster:
+                    found = True
+                    print(f"   Found target cluster {cluster} on PC {pc.name}")
+                    break
+        if not found:
+            print(f"Unable to find target cluster {cluster} on either PC")
+            raise SystemExit()
+
+    print()
+    print(" - All target clusters found on at least one PC")
+    print()
+
+    # Check that all our target clusters have a valid network
+    for cluster in all_targets:
+        found = False
+        for pc in [source_pc,target_pc]:
+            for cl_uuid in pc.clusters.keys():
+                if pc.clusters[cl_uuid]['name'] == cluster:
+                    if pe_config[cluster]['network_name'] in pc.clusters[cl_uuid]['subnets']:
+                        found = True
+                        print(f"   Found network {pe_config[cluster]['network_name']} on cluster {cluster}")
+                        break
+        if not found:
+            print(f"Unable to find network {pe_config[cluster]['network_name']} on cluster {cluster}")
+            raise SystemExit()
+    print()
+    print(" - All target clusters have a valid network")
+    print()
 
     print(" - Everything Checks out, go for launch")
+    print()
+
+
 if __name__ == "__main__":
 
    # Parse arguments
@@ -448,26 +482,74 @@ if __name__ == "__main__":
     spc = config['source_pc']
     tpc = config['target_pc']
 
-    pe_user = config['prism_element']['username']
-    pe_pass = config['prism_element']['password']
+    # Identify all our target clusters
+    source_cluster_targets = config['source_pc']['target_clusters'].split(",")
+    target_cluster_targets = config['target_pc']['target_clusters'].split(",")
+    all_targets = source_cluster_targets + target_cluster_targets
 
-    target_subnet_name = config['global']['network_name']
+    pe_config = dict()
 
-   # Create our PC objects
+    # Check for and parse our credentials for PE
+    # If they're defined in the cluster's stanza then they take precidence
+    # Otherwise we look for global creds
+    for pe_cluster in all_targets:
+        pe_config[pe_cluster] = dict()
+        if pe_cluster in config:
+            if 'username' in config[pe_cluster] and 'password' in config[pe_cluster]:
+                print(f" - Using specific credentials for cluster {pe_cluster}")
+                pe_config[pe_cluster]['username'] = config[pe_cluster]['username']
+                pe_config[pe_cluster]['password'] = config[pe_cluster]['password']
+            elif 'pe_username' in config['global'] and 'pe_password' in config['global']:
+                print(f" - Using global credentials for cluster {pe_cluster}")
+                pe_config[pe_cluster]['username'] = config['global']['pe_username']
+                pe_config[pe_cluster]['password'] = config['global']['pe_password']
+            else:
+                print(f"Unable to find PE credentials for cluster {pe_cluster} in config file")
+                raise SystemExit()
+        elif 'pe_username' in config['global'] and 'pe_password' in config['global']:
+            print(f" - Using global credentials for cluster {pe_cluster}")
+            pe_config[pe_cluster]['username'] = config['global']['pe_username']
+            pe_config[pe_cluster]['password'] = config['global']['pe_password']
+    
+        else:
+            print(f"Unable to find PE credentials for cluster {pe_cluster} in config file")
+            raise SystemExit()  
+
+        # Now check for network name
+        if pe_cluster in config:
+            if 'network_name' in config[pe_cluster]:
+                print(f" - Using specific network for cluster {pe_cluster}")
+                pe_config[pe_cluster]['network_name'] = config[pe_cluster]['network_name']
+            elif config['global']['network_name']:
+                print(f" - Using global network for cluster {pe_cluster}")
+                pe_config[pe_cluster]['network_name'] = config['global']['network_name']
+            else:
+                print(f"Unable to find network name for cluster {pe_cluster} in config file")
+                raise SystemExit()
+        elif 'network_name' in config['global']:
+            print(f" - Using global network for cluster {pe_cluster}")
+            pe_config[pe_cluster]['network_name'] = config['global']['network_name']
+        else:
+            print(f"Unable to find network name for cluster {pe_cluster} in config file")
+            raise SystemExit()
+
+    # Check for and parse our networks for each cluster
+    # Create our PC objects
     source_pc = Prism_Central(spc['ip'],spc['username'],spc['password'])
     target_pc = Prism_Central(tpc['ip'],tpc['username'],tpc['password'])
 
-   # Connect to Source and Target Prism Centrals
+    # Connect to Source and Target Prism Centrals
+    print()
     print("Creating connections to Prism Central Instances")
     print(" - Connecting to Source PC")
     source_pc.connect()
     print(" - Connecting to Target PC")
     target_pc.connect()
 
-   # Run a few pre-checks to make sure our environment is sane
-    pre_checks(source_pc, target_pc, source_vm_name, target_subnet_name, source_image_name)
+    # Run a few pre-checks to make sure our environment is sane
+    pre_checks(source_pc, target_pc, source_vm_name, source_image_name, pe_config, all_targets)
 
-   # Gather info on the source VM
+    # Gather info on the source VM
     print()
     print(f"Gathering Information on source VM: {source_vm_name}")
     svm = source_pc.vm_by_name(source_vm_name)
@@ -475,6 +557,10 @@ if __name__ == "__main__":
     print(f" - VM uuid: {svm.uuid}")
     print(f" - Disk uuid: {svm.disk_uuid}")
 
+    # TODO:  Use an in-band method to move the image if PEs are all attached to PCs in the same AZ
+
+    # We don't have an AZ relationship between these PCs, so we'll use an out of band method
+    # to move the image from Source PC to Target PC
     print() 
     print(f"Generating image from source VM")
     task_id = source_pc.generate_image(svm, source_image_name)
@@ -514,7 +600,7 @@ if __name__ == "__main__":
     print()
     for pc in [source_pc,target_pc]:
         output_info.append(f"Prism Central: {pc.name}")
-        print(f"Creating VMs on all clusters attached to {pc.name}")
+        print(f"Creating VMs on clusters attached to {pc.name}")
         new_vm = VM()
         new_vm.description = "Generated VM from Distribution Script"
         new_vm.num_sockets = svm.num_sockets
@@ -524,21 +610,23 @@ if __name__ == "__main__":
        # We kick them off in parallel, then check them all at once for success
         source_tasks = list()
         for cluster_uuid in pc.clusters.keys():
-            new_vm.subnet = pc.clusters[cluster_uuid]['subnets'][target_subnet_name]['uuid']
-            new_vm.cluster_uuid = cluster_uuid
-            if not args.snapshot_name:
-                new_vm.name = f"{source_vm_name}_VM_{pc.clusters[cluster_uuid]['name']}_{datecode}"
-            else:
-                new_vm.name = f"{args.snapshot_name} VM"
+            if (pc.clusters[cluster_uuid]['name'] in all_targets):
+                cl_name = pc.clusters[cluster_uuid]['name']
+                new_vm.subnet = pc.clusters[cluster_uuid]['subnets'][pe_config[cl_name]['network_name']]['uuid']
+                new_vm.cluster_uuid = cluster_uuid
+                if not args.snapshot_name:
+                    new_vm.name = f"{source_vm_name}_VM_{pc.clusters[cluster_uuid]['name']}_{datecode}"
+                else:
+                    new_vm.name = f"{args.snapshot_name} VM"
 
-            if pc.uuid == source_pc.uuid:
-                new_vm.disk_uuid = source_image_uuid
-            else:
-                new_vm.disk_uuid = target_image_uuid
+                if pc.uuid == source_pc.uuid:
+                    new_vm.disk_uuid = source_image_uuid
+                else:
+                    new_vm.disk_uuid = target_image_uuid
 
-            print(f" - Creating VM {new_vm.name} on cluster {pc.clusters[cluster_uuid]['name']}")
-            task_id = pc.create_vm(new_vm,cluster_uuid)
-            source_tasks.append(task_id)
+                print(f" - Creating VM {new_vm.name} on cluster {pc.clusters[cluster_uuid]['name']}")
+                task_id = pc.create_vm(new_vm,cluster_uuid)
+                source_tasks.append(task_id)
 
         source_vms = list()
         print()
@@ -550,7 +638,7 @@ if __name__ == "__main__":
         print()
         print("Creating Snapshots on VMs")
         for vm in source_vms:
-            res = snapshot_vm(vm,pc)
+            res = snapshot_vm(vm,pc,pe_config)
             output_info.append(f"  Cluster: {res[2]}")
             output_info.append(f"       VM: {res[0]}")
             output_info.append(f"       Snap: {res[1]}")

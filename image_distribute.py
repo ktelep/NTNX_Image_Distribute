@@ -128,11 +128,11 @@ class Prism_Central:
 
     def connect(self):
         # Connect to PC and get a list of the clusters and CVMs associated with it
-        payload = {"kind":"cluster"}
+        payload = {"kind":"cluster"} 
         cl_resp = self._post_request("clusters/list",payload)
         payload = {"kind":"host"}
         host_resp = self._post_request("hosts/list",payload)
-        payload = {"kind":"subnet"}
+        payload = {"kind":"subnet", "offset":0, "length":1000}  # Ask for 1000 subnets at a time
         subnet_resp = self._post_request("subnets/list",payload)
 
         for cluster in cl_resp['entities']:
@@ -472,7 +472,7 @@ if __name__ == "__main__":
     local_image_filename = f"{source_vm_name}_image_{datecode}.qcow2"
 
    # Read and parse config file 
-    config = configparser.ConfigParser()
+    config = configparser.ConfigParser(interpolation=None)
     print(f"Parsing Config File: {args.config}")
     parsed = config.read(args.config)
     if not parsed:

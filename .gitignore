@@ -1,3 +1,4 @@
 .venv/
 *.qcow2
 settings.json
+test_config.ini

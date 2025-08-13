@@ -3,6 +3,7 @@ import requests
 import pprint
 import json
 import time
+import sys
 import os
 import re
 import argparse
@@ -87,6 +88,8 @@ class VM:
         self.cluster_uuid = None
         self.subnet = None
         self.disk_uuid = None
+        self.vtpm_config = None
+        self.boot_config = None
         self.entity = None
 
     def load_entity(self, entity):
@@ -100,6 +103,12 @@ class VM:
         self.cluster_uuid = entity['status']['cluster_reference']['uuid']
         self.subnet = entity['status']['resources']['nic_list'][0]['subnet_reference']
         self.disk_uuid = entity['status']['resources']['disk_list'][0]['uuid']
+        self.boot_config = entity['status']['resources']['boot_config']
+        if 'vtpm_config' in entity['status']['resources']:
+            self.vtpm_config = entity['status']['resources']['vtpm_config']
+            # We have to remove the version field, as it's read-only
+            if 'version' in self.vtpm_config:
+                del self.vtpm_config['version']
         self.entity = entity
 
     def __repr__(self):
@@ -128,7 +137,7 @@ class Prism_Central:
 
     def connect(self):
         # Connect to PC and get a list of the clusters and CVMs associated with it
-        payload = {"kind":"cluster"} 
+        payload = {"kind":"cluster"}
         cl_resp = self._post_request("clusters/list",payload)
         payload = {"kind":"host"}
         host_resp = self._post_request("hosts/list",payload)
@@ -208,7 +217,10 @@ class Prism_Central:
                                                    "subnet_reference": { "kind": "subnet",
                                                    "uuid": "TBD" }
                                                   }
-                                                ]
+                                                ],
+                                    "boot_config": { "boot_device_order": ["DISK","NETWORK"],
+                                                     "boot_type": "TBD"
+                                                   }
                                    },
             "name": "TBD",
             "cluster_reference": {
@@ -227,16 +239,21 @@ class Prism_Central:
         vm_spec['spec']['cluster_reference']['uuid'] = vm.cluster_uuid
         vm_spec['spec']['resources']['disk_list'][0]['data_source_reference']['uuid'] = vm.disk_uuid
         vm_spec['spec']['resources']['nic_list'][0]['subnet_reference']['uuid'] = vm.subnet
+        vm_spec['spec']['resources']['boot_config'] = vm.boot_config
+        if vm.boot_config['boot_type'] == 'SECURE_BOOT':
+            vm_spec['spec']['resources']['machine_type'] = "Q35"
+        if vm.vtpm_config:
+            vm_spec['spec']['resources']['vtpm_config'] = vm.vtpm_config
 
         res = self._post_request("vms",vm_spec) 
         return res['status']['execution_context']['task_uuid']
 
     def vm_by_name(self, vm_name):
         name_filter = f"vm_name=={vm_name}"
-        payload = {"kind":"vm","filter":name_filter} 
+        payload = {"kind":"vm","filter":name_filter,"offset":0,"length":1000} 
         vm_resp = self._post_request("vms/list",payload)
         vm = VM()
-        if 'entities' in vm_resp:
+        if 'entities' in vm_resp and len(vm_resp['entities']) > 0:
             vm.load_entity(vm_resp['entities'][0])
             return vm
         else:
@@ -386,7 +403,10 @@ def pre_checks(source_pc, target_pc, vm_name, source_image_name, pe_config, all_
 
     try:
         if not source_pc.vm_by_name(vm_name):
+            print()
             print("Unable to collect information about Source VM from Prism Central")
+            print(f" - Source VM named {vm_name} does not exist on Source PC")
+            print("   Please verify the VM name, confirm capitalization and try again") 
             raise SystemExit() 
     except Exception as e:
         print("Unable to collect information about Source VM from Prism Central")
@@ -453,6 +473,8 @@ if __name__ == "__main__":
     parser.add_argument("-c","--config", help="Name of Configuration File (default: config.ini)",
                         default="config.ini", required=False) 
     parser.add_argument("-k","--keep", help="Keep downloaded copy of disk image",
+                        action="store_true", required=False)
+    parser.add_argument("-d","--dryrun", help="Run all the prechecks but do not perform any actions",
                         action="store_true", required=False)
     args = parser.parse_args()
 
@@ -556,6 +578,14 @@ if __name__ == "__main__":
 
     print(f" - VM uuid: {svm.uuid}")
     print(f" - Disk uuid: {svm.disk_uuid}")
+    print(f" - Boot Type: {svm.boot_config['boot_type']}")
+    if svm.vtpm_config:
+        print("        vTPM: Enabled")
+
+    if args.dryrun:
+        print()
+        print("Dry Run specified, exiting before making any changes")
+        sys.exit(0)
 
     # TODO:  Use an in-band method to move the image if PEs are all attached to PCs in the same AZ
 
@@ -614,6 +644,12 @@ if __name__ == "__main__":
                 cl_name = pc.clusters[cluster_uuid]['name']
                 new_vm.subnet = pc.clusters[cluster_uuid]['subnets'][pe_config[cl_name]['network_name']]['uuid']
                 new_vm.cluster_uuid = cluster_uuid
+
+                # Transfer in our UEFI boot and vTPM config if applicable
+                new_vm.boot_config = svm.boot_config
+                if svm.vtpm_config:
+                    new_vm.vtpm_config = svm.vtpm_config 
+
                 if not args.snapshot_name:
                     new_vm.name = f"{source_vm_name}_VM_{pc.clusters[cluster_uuid]['name']}_{datecode}"
                 else:

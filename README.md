@@ -34,6 +34,8 @@ You can optionally pass the following parameters:
 
 -k :  Keep the local copy of the image and do not delete it after uploading to target
 
+-d :  Dry run, perform all checks but do not actually execute the distribution process
+
 As an example, naming the image 'Citrix Desktop - MyUpdated - Patched 10-14-2023' using VM named "VQ2UA202" as the source VM (Note the quotes around the name)
 
     python3 image_distribute.py -n "Citrix Desktop - MyUpdated - Patched 10-14-2023" VQ2UA202

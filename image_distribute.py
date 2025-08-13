@@ -102,7 +102,13 @@ class VM:
         self.cluster_name = entity['status']['cluster_reference']['name']
         self.cluster_uuid = entity['status']['cluster_reference']['uuid']
         self.subnet = entity['status']['resources']['nic_list'][0]['subnet_reference']
-        self.disk_uuid = entity['status']['resources']['disk_list'][0]['uuid']
+
+        # Locate the correct disk, we want the SCSI disk at device index 0
+        for disk in entity['status']['resources']['disk_list']:
+            if disk['device_properties']['disk_address']['adapter_type'] == 'SCSI' and \
+               disk['device_properties']['disk_address']['device_index'] == 0:
+                   self.disk_uuid = entity['status']['resources']['disk_list'][0]['uuid']
+
         self.boot_config = entity['status']['resources']['boot_config']
         if 'vtpm_config' in entity['status']['resources']:
             self.vtpm_config = entity['status']['resources']['vtpm_config']

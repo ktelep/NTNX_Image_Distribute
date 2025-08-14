@@ -14,9 +14,15 @@ from tqdm import tqdm
 from tqdm.utils import CallbackIOWrapper
 from datetime import datetime
 
-"""
-Suppress insecure connection warnings with urllib3
-"""
+# Create in-line configuration in lieu of config file 
+config_data = '''
+# Start of Config Data (if using inline config option)
+
+
+# End of Config Data 
+'''
+
+# Suppress insecure connection warnings with urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Setup the pretty printer for debug purposes
@@ -482,6 +488,9 @@ if __name__ == "__main__":
                         action="store_true", required=False)
     parser.add_argument("-d","--dryrun", help="Run all the prechecks but do not perform any actions",
                         action="store_true", required=False)
+    parser.add_argument("-i","--infile", help="Use inline config data instead of config file",
+                        action="store_true", required=False)
+
     args = parser.parse_args()
 
    # Identify our source VM
@@ -500,11 +509,27 @@ if __name__ == "__main__":
     local_image_filename = f"{source_vm_name}_image_{datecode}.qcow2"
 
    # Read and parse config file 
+    parsed = False
+
     config = configparser.ConfigParser(interpolation=None)
-    print(f"Parsing Config File: {args.config}")
-    parsed = config.read(args.config)
+
+    print("Parsing Configuration Data")
+
+    if args.infile:
+        inline_length = len(config_data.strip().splitlines())
+        if inline_length >= 13:   # 14 lines is the minimum basic configuration
+            print(" - Using inline config data")
+            parsed = config.read_string(config_data)
+            parsed = True
+        else:
+            print(" - Inline config data not populated, falling back to config file")
+    
     if not parsed:
-        print("Unable to parse config file, please verify path and file contents")
+        print(f" - Using external config file {args.config}")
+        parsed = config.read(args.config)
+
+    if not parsed:
+        print("Unable to parse config data, please verify path and file contents")
         raise SystemExit()
 
     spc = config['source_pc']

@@ -32,6 +32,8 @@ You can optionally pass the following parameters:
 
 -c :  Specify a non-default config file and location (default is config.ini in the current directory)
 
+-i :  Specify that configuration information is included in the top of the script as the config_data variable (This will fall back to -c or the default config.ini if it is not populated)
+
 -k :  Keep the local copy of the image and do not delete it after uploading to target
 
 -d :  Dry run, perform all checks but do not actually execute the distribution process

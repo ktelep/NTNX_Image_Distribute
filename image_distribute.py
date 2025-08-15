@@ -355,7 +355,7 @@ class Prism_Central:
         resp = self._post_request("images",image_spec)
         return resp['status']['execution_context']['task_uuid']
         
-    def create_image(self, image_name):
+    def create_image(self, image_name,cluster_uuid=None):
         image_create_template = '''
                { "metadata": { "kind": "image" },
                  "spec": { "name": "TBD", 
@@ -363,9 +363,11 @@ class Prism_Central:
                         }
                 }
         '''
-
+      
         image_create = json.loads(image_create_template) 
         image_create['spec']['name'] = image_name
+        if cluster_uuid:
+            image_create['spec']['resources']['initial_placement_ref_list'] = [ { "kind": "cluster", "uuid": cluster_uuid } ]
         resp = self._post_request("images",image_create)
         return resp['status']['execution_context']['task_uuid']
 
@@ -646,7 +648,16 @@ if __name__ == "__main__":
    # Create our image at the target pc
     print()
     print("Creating Image object in Target Prism Central")
-    task_id = target_pc.create_image(source_image_name)
+
+    # Find a target cluster UUID to use for initial placement
+    target_cluster_uuid = None
+    for cluster_uuid in target_pc.clusters.keys():
+        if (target_pc.clusters[cluster_uuid]['name'] in target_cluster_targets):
+            target_cluster_uuid = cluster_uuid
+            break   
+
+    task_id = target_pc.create_image(source_image_name,target_cluster_uuid)
+
     completed_task = wait_for_task(target_pc, task_id)
     target_image_uuid = completed_task['entity_reference_list'][0]['uuid']
     print(f" - Target Image name: {source_image_name} uuid: {target_image_uuid}")

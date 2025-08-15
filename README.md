@@ -47,7 +47,6 @@ As an example, naming the image 'Citrix Desktop - MyUpdated - Patched 10-14-2023
 1. Confirms all PCs are accessible, Networks all exist on all clusters, and source VM exists
 2. Creates an image from the identified "Gold" VM
 3. Downloads the image to the local system
-4. Uploads the image to the target PC
-5. Creates VMs on every cluster attached to both source and target PCs based off of the image
+4. Uploads the image to the target PC onto one of the identified target clusters
+5. Creates VMs on identified cluster attached to both source and target PCs based off of the image
 6. Creates a snapshot of each VM at the PE level in preparation for Citrix use
-
